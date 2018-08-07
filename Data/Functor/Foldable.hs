@@ -225,7 +225,7 @@ class Functor (Base t) => Recursive t where
   -- > -- >>> calc "subtract 2; multiply by 2; add 1" <*> pure 42
   -- > -- Just 81
   -- > calc :: String -> Maybe (Int -> Int)
-  -- > calc = gpara (distZygo parseNumberF) calcF
+  -- > calc = gpara (gatherZygo parseNumberF) calcF
   -- >
   -- > parseDigit :: Char -> Maybe Int
   -- > parseDigit c = (ord c - ord '0') <$ guard (c `elem` ['0'..'9'])
@@ -238,12 +238,10 @@ class Functor (Base t) => Recursive t where
   -- >   | c `elem` ['0'..'9'] = (\x y -> 10 * x + y) <$> parseDigit c <*> maybeY
   -- >   | otherwise           = maybeY
   -- >
-  -- > calcF :: ListF Char (EnvT String
-  -- >                           ((,) (Maybe Int))
-  -- >                           (Maybe (Int -> Int)))
+  -- > calcF :: ListF Char (String, (Maybe Int, Maybe (Int -> Int)))
   -- >       -> Maybe (Int -> Int)
   -- > calcF Nil = Just id
-  -- > calcF (Cons c (EnvT cs (maybeX,maybeF)))
+  -- > calcF (Cons c (cs, (maybeX,maybeF)))
   -- >   | "add "         `isPrefixOf` (c:cs) = (\f x -> f . (+ x))        <$> maybeF <*> maybeX
   -- >   | "subtract "    `isPrefixOf` (c:cs) = (\f x -> f . (subtract x)) <$> maybeF <*> maybeX
   -- >   | "multiply by " `isPrefixOf` (c:cs) = (\f x -> f . (* x))        <$> maybeF <*> maybeX
@@ -311,7 +309,7 @@ class Functor (Base t) => Recursive t where
   -- > --     0.2.1
   -- > --     0.2.2
   -- > drawTree :: Tree String -> String
-  -- > drawTree = gprepro (distZygo mergeHeaders) indent drawTreeF
+  -- > drawTree = gprepro (gatherZygo mergeHeaders) indent drawTreeF
   -- >
   -- > indent :: TreeF String a -> TreeF String a
   -- > indent (Leaf s) = Leaf ("  " ++ s)
@@ -437,7 +435,7 @@ class Functor (Base t) => Corecursive t where
   -- > -- >>> upThenFork 4
   -- > -- [(1,1),(2,2),(3,3),(4,4),(5,3),(6,2),(7,1)]
   -- > upThenFork :: Int -> [(Int,Int)]
-  -- > upThenFork n = gpostpro (distGApo down) incrementFst up 1 where
+  -- > upThenFork n = gpostpro (scatterGApo down) incrementFst up 1 where
   -- >   incrementFst :: ListF (Int,b) c -> ListF (Int,b) c
   -- >   incrementFst Nil             = Nil
   -- >   incrementFst (Cons (x, y) z) = Cons (1+x, y) z
@@ -679,26 +677,23 @@ instance Corecursive (Either a b) where embed = getConst
 -- > -- >>> splitInThree "one, two, three, four"
 -- > -- Just ("one","two","three, four")
 -- > splitInThree :: String -> Maybe (String,String,String)
--- > splitInThree = gcata (dist splitAtCommaSpaceF) splitInThreeF
+-- > splitInThree = gcata (gather splitAtCommaSpaceF) splitInThreeF
 -- >
--- > splitInThreeF :: ListF Char ( (String, Maybe (String,String))
+-- > splitInThreeF :: ListF Char ( String
+-- >                             , Maybe (String,String)
 -- >                             , Maybe (String,String,String)
 -- >                             )
 -- >               -> Maybe (String,String,String)
--- > splitInThreeF (Cons ',' ((_, Just (' ':ys,zs)), _)) = Just ([], ys, zs)
--- > splitInThreeF (Cons x (_, Just (xs,ys,zs)))         = Just (x:xs, ys, zs)
--- > splitInThreeF _                                     = Nothing
+-- > splitInThreeF (Cons ',' (_, Just (' ':ys,zs), _)) = Just ([], ys, zs)
+-- > splitInThreeF (Cons x   (_, _, Just (xs,ys,zs)))  = Just (x:xs, ys, zs)
+-- > splitInThreeF _                                   = Nothing
 -- >
--- > dist :: Corecursive t
--- >      => (Base t (t,b) -> b)
--- >      -> Base t ((t,b), a)
--- >      -> ((t,b), Base t a)
--- > dist f baseTBA = let baseTB = fst <$> baseTBA
--- >                      baseT  = fst <$> baseTB
--- >                      baseA  = snd <$> baseTBA
--- >                      b      = f baseTB
--- >                      t      = embed baseT
--- >                  in ((t,b), baseA)
+-- > gather :: Corecursive t
+-- >        => (Base t (t, b) -> b)
+-- >        -> Gather (Base t) a (t, b, a)
+-- > gather f a baseTBA = let baseTB = fmap (\(t,b,_) -> (t,b)) baseTBA
+-- >                          baseT  = fmap (\(t,_,_) -> t)     baseTBA
+-- >                      in (embed baseT, f baseTB, a)
 gfold, gcata
   :: forall t a s. Recursive t
   => Gather (Base t) a s
@@ -725,7 +720,7 @@ gatherCata = const
 -- > -- >>> upDownUp 4
 -- > -- [1,2,3,4,3,2,1,2,3,4]
 -- > upDownUp :: Int -> [Int]
--- > upDownUp n = gana (dist upAgain down) up 1 where
+-- > upDownUp n = gana (scatter upAgain down) up 1 where
 -- >   up :: Int -> ListF Int (Int `Either` Int `Either` Int)
 -- >   up i = Cons i (if i == n then Left (Right (n-1)) else Right (i+1))
 -- >
@@ -735,14 +730,13 @@ gatherCata = const
 -- >   upAgain :: Int -> ListF Int Int
 -- >   upAgain i = if i > n then Nil else Cons i (i+1)
 -- >
--- > dist :: Functor f
--- >      => (c -> f c)
--- >      -> (b -> f (Either c b))
--- >      -> c `Either` b `Either` f a
--- >      -> f (c `Either` b `Either` a)
--- > dist f _ (Left (Left z))  = Left <$> Left <$> f z
--- > dist _ g (Left (Right y)) = Left <$> g y
--- > dist _ _ (Right fx)       = Right <$> fx
+-- > scatter :: Functor f
+-- >         => (c -> f c)
+-- >         -> (b -> f (Either c b))
+-- >         -> Scatter f a (c `Either` b `Either` a)
+-- > scatter g _ (Left (Left c))  = Right $ fmap (Left . Left) $ g c
+-- > scatter _ g (Left (Right b)) = Right $ fmap Left $ g b
+-- > scatter _ _ (Right a)        = Left a
 gunfold, gana
   :: forall t a s. Corecursive t
   => Scatter (Base t) a s
@@ -774,10 +768,10 @@ scatterAna = Left
 -- > -- >>> fmap fib [0..8]
 -- > -- [1,1,2,3,5,8,13,21,34]
 -- > fib :: Int -> Integer
--- > fib = ghylo distHisto distAna addF down where
--- >   down :: Int -> Maybe (Identity Int)
+-- > fib = ghylo gatherHisto scatterAna addF down where
+-- >   down :: Int -> Maybe Int
 -- >   down 0 = Nothing
--- >   down n = Just (Identity (n-1))
+-- >   down n = Just (n-1)
 -- >
 -- >   addF :: Maybe (Cofree Maybe Integer) -> Integer
 -- >   addF Nothing                     = 1
@@ -1017,10 +1011,10 @@ instance (Functor f, Read1 f) => Read (Nu f) where
 -- > -- >>> nubEnd [1,2,2,3,2,1,1,4]
 -- > -- [3,2,1,4]
 -- > nubEnd :: [Int] -> [Int]
--- > nubEnd = zygo gather go where
--- >   gather :: ListF Int (Set Int) -> Set Int
--- >   gather Nil         = Set.empty
--- >   gather (Cons x xs) = Set.insert x xs
+-- > nubEnd = zygo toSet go where
+-- >   toSet :: ListF Int (Set Int) -> Set Int
+-- >   toSet Nil         = Set.empty
+-- >   toSet (Cons x xs) = Set.insert x xs
 -- >
 -- >   go :: ListF Int (Set Int, [Int]) -> [Int]
 -- >   go Nil                = []
@@ -1048,7 +1042,7 @@ gatherZygo g x fyx = (g $ fst <$> fyx, x)
 -- > -- >>> take 10 $ map isUnbalanced $ iterate (\t -> leaf () `branch` t) $ leaf ()
 -- > -- [False,False,False,False,True,True,True,True,True,True]
 -- > isUnbalanced :: Tree a -> Bool
--- > isUnbalanced = gzygo minDepthF (distZygo maxDepthF) isUnbalancedF
+-- > isUnbalanced = gzygo minDepthF (gatherZygo maxDepthF) isUnbalancedF
 -- >
 -- > minDepthF :: TreeF a Int -> Int
 -- > minDepthF (Leaf _)     = 1
@@ -1058,10 +1052,10 @@ gatherZygo g x fyx = (g $ fst <$> fyx, x)
 -- > maxDepthF (Leaf _)     = 1
 -- > maxDepthF (Branch x y) = 1 + max x y
 -- >
--- > isUnbalancedF :: TreeF a (EnvT Int ((,) Int) Bool) -> Bool
+-- > isUnbalancedF :: TreeF a (Int, (Int, Bool)) -> Bool
 -- > isUnbalancedF (Leaf _) = False
--- > isUnbalancedF (Branch (EnvT min1 (max1, unbalanced1))
--- >                       (EnvT min2 (max2, unbalanced2)))
+-- > isUnbalancedF (Branch (min1, (max1, unbalanced1))
+-- >                       (min2, (max2, unbalanced2)))
 -- >   = unbalanced1 || unbalanced2 || 2 * (1 + min min1 min2) < (1 + max max1 max2)
 gzygo
   :: Recursive t
@@ -1172,7 +1166,7 @@ chrono = ghylo gatherHisto scatterFutu
 -- > -- ..*
 -- > -- ***
 -- > decompressImage :: [Int] -> String
--- > decompressImage = gchrono (distZygo toggle) distAna linesOf3 decodeRLE where
+-- > decompressImage = gchrono (gatherZygo toggle) scatterAna linesOf3 decodeRLE where
 -- >   decodeRLE :: [Int] -> ListF Bool (Free (ListF Bool) [Int])
 -- >   decodeRLE [] = Nil
 -- >   decodeRLE (1:ns) = Cons True $ pure ns
@@ -1187,15 +1181,13 @@ chrono = ghylo gatherHisto scatterFutu
 -- >   toggle (Cons True '.')  = '*'
 -- >   toggle (Cons True _)    = '.'
 -- >
--- >   linesOf3 :: ListF Bool (CofreeT (ListF Bool) ((,) Char) String) -> String
--- >   linesOf3 (Cons b1 (CofreeT (c2, _ :< Cons _
--- >                     (CofreeT (c3, _ :< Cons _
--- >                     (CofreeT (_,  s :< _)))))))
+-- >   linesOf3 :: ListF Bool (Cofree (ListF Bool) (Char, String)) -> String
+-- >   linesOf3 (Cons b1 ((c2, _) :< Cons _ ((c3, _) :< Cons _ ((_, s) :< _))))
 -- >     = toggle (Cons b1 c2) : c2 : c3 : '\n' : s
 -- >   linesOf3 _ = ""
 -- >
 -- >   writeBool :: Bool -> Free (ListF Bool) ()
--- >   writeBool b = FreeT $ Identity $ Free $ Cons b $ pure ()
+-- >   writeBool b = Free $ Cons b $ pure ()
 gchrono :: Functor f =>
            Gather f b r ->
            Scatter f a s ->
@@ -1336,21 +1328,20 @@ coelgot phi psi = h where h = phi . (id &&& fmap h . psi)
 -- > -- >>> putStrLn (alternateBullets tree)
 -- > -- * 0.
 -- > --   - 0.1.
--- > --   * 0.1.1.
+-- > --     * 0.1.1.
 -- > --       - 0.1.1.1
 -- > --       - 0.1.1.2
 -- > --     * 0.1.2
 -- > --   - 0.2.
 -- > --     * 0.2.1
 -- > --     * 0.2.2
--- > --
 -- > alternateBullets :: Tree String -> String
 -- > alternateBullets = zygoHistoPrepro mergeHeaders indent starThenDash
 -- >
--- > starThenDash :: TreeF String (EnvT String (Cofree (TreeF String)) String) -> String
+-- > starThenDash :: TreeF String (String, Cofree (TreeF String) String) -> String
 -- > starThenDash (Leaf s) = addBullet '*' s
--- > starThenDash (Branch (EnvT headerL cofreeL)
--- >                      (EnvT headerR cofreeR))
+-- > starThenDash (Branch (headerL, cofreeL)
+-- >                      (headerR, cofreeR))
 -- >   = addBullet '*' (mergeHeaders (Branch headerL headerR)) ++ "\n"
 -- >  ++ dashThenStar headerL cofreeL ++ "\n"
 -- >  ++ dashThenStar headerR cofreeR
@@ -1369,10 +1360,6 @@ coelgot phi psi = h where h = phi . (id &&& fmap h . psi)
 -- > addBullet bullet line = takeWhile (== ' ') line
 -- >                      ++ (bullet:" ")
 -- >                      ++ dropWhile (== ' ') line
---
--- Notice that the indentation of @"* 0.1.1."@ is off by one! This is because
--- the comonad-based implementation of 'zygoHistoPrepro' is
--- <https://github.com/ekmett/recursion-schemes/issues/50 subtly incorrect>.
 zygoHistoPrepro
   :: (Corecursive t, Recursive t)
   => (Base t b -> b)
