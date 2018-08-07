@@ -1128,6 +1128,21 @@ scatterGApoT _ scatter (Right s) = fmap Right <$> scatter s
 histo :: Recursive t => (Base t (Cofree (Base t) a) -> a) -> t -> a
 histo = gcata gatherHisto
 
+-- |
+--
+-- > -- |
+-- > -- >>> fmap (gfib [3,4,5]) [0..9]
+-- > -- [3,4,5,9,14,23,37,60,97,157]
+-- > gfib :: [Integer] -> Natural -> Integer
+-- > gfib initial = ghisto (gatherZygo consumeInitialF) gfibF where
+-- >   consumeInitialF :: Maybe [Integer] -> [Integer]
+-- >   consumeInitialF Nothing   = initial
+-- >   consumeInitialF (Just xs) = drop 1 xs
+-- >
+-- >   gfibF :: Maybe (Cofree Maybe ([Integer], Integer)) -> Integer
+-- >   gfibF (Just ((_:x:_, _) :< _))              = x
+-- >   gfibF (Just ((_, x) :< Just ((_, y) :< _))) = x + y
+-- >   gfibF _                                     = head initial
 ghisto :: Recursive t => Gather (Base t) a s -> (Base t (Cofree (Base t) s) -> a) -> t -> a
 ghisto gather = gcata (gatherGHisto gather)
 
